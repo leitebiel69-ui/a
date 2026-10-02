@@ -3374,99 +3374,152 @@ local function spawnRecruit(opts)
 	local hrp = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
 	if not hrp then return end
 
-	-- spawn position: fixed in front of player AT CLICK TIME
 	local spawnCF = hrp.CFrame * CFrame.new(0, 0, -6)
 	Recruit.anchor = spawnCF
 
-	-- dummy model with TARGET skin
-	local model = Instance.new("Model")
-	model.Name = "NamelessRecruit_" .. tostring(opts.name)
-
+	-- 1) pull target appearance
 	local okDesc, desc = pcall(function()
 		return Players:GetHumanoidDescriptionFromUserId(opts.userId)
 	end)
 	if not okDesc or not desc then
-		Library.Notify({ Title = "Recruit", Text = "falha ao puxar skin", Icon = "x" })
+		Library.Notify({ Title = "Recruit", Text = "não puxou skin do userId", Icon = "x" })
 		return
 	end
 
-	local okCreate, dummy = pcall(function()
-		return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
-	end)
-	-- fallback R6
-	if not okCreate or not dummy then
-		okCreate, dummy = pcall(function()
-			return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R6)
-		end)
-	end
-	if not okCreate or not dummy then
-		Library.Notify({ Title = "Recruit", Text = "CreateHumanoidModel falhou", Icon = "x" })
+	-- 2) clone LOCAL character (keeps meshes/clothes structure), then ApplyDescription
+	char.Archivable = true
+	local okClone, dummy = pcall(function() return char:Clone() end)
+	char.Archivable = false
+	if not okClone or not dummy then
+		Library.Notify({ Title = "Recruit", Text = "clone local falhou", Icon = "x" })
 		return
 	end
+	dummy.Name = "NamelessRecruit_" .. tostring(opts.name)
 
-	dummy.Name = model.Name
+	-- strip scripts / animate
 	for _, d in ipairs(dummy:GetDescendants()) do
 		if d:IsA("BaseScript") or d:IsA("LocalScript") or d:IsA("Script") then
 			d:Destroy()
-		elseif d:IsA("BasePart") then
+		end
+	end
+	-- also remove Animator noise
+	local hum = dummy:FindFirstChildOfClass("Humanoid")
+	if hum then
+		pcall(function()
+			local anim = hum:FindFirstChildOfClass("Animator")
+			if anim then anim:Destroy() end
+		end)
+		-- apply TARGET skin
+		local okApply = pcall(function()
+			hum:ApplyDescription(desc)
+		end)
+		if not okApply then
+			-- fallback: try CreateHumanoidModel and swap
+			local ok2, created = pcall(function()
+				return Players:CreateHumanoidModelFromDescription(desc, hum.RigType)
+			end)
+			if ok2 and created then
+				dummy:Destroy()
+				dummy = created
+				dummy.Name = "NamelessRecruit_" .. tostring(opts.name)
+				hum = dummy:FindFirstChildOfClass("Humanoid")
+			end
+		end
+	end
+
+	-- freeze parts AFTER description (ApplyDescription may rebuild parts)
+	task.wait()
+	hum = dummy:FindFirstChildOfClass("Humanoid")
+	for _, d in ipairs(dummy:GetDescendants()) do
+		if d:IsA("BasePart") then
 			d.Anchored = true
 			d.CanCollide = false
 			d.Massless = true
 		end
+		if d:IsA("BaseScript") or d:IsA("LocalScript") or d:IsA("Script") then
+			d:Destroy()
+		end
 	end
-	local hum = dummy:FindFirstChildOfClass("Humanoid")
 	if hum then
 		hum.DisplayName = opts.name
 		hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 		hum.WalkSpeed = 0
 		hum.JumpPower = 0
-		hum.JumpHeight = 0
+		pcall(function() hum.JumpHeight = 0 end)
 		pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
 	end
 
-	-- overhead from local template (visual only)
+	-- 3) overhead ALWAYS (template or custom)
+	local head = dummy:FindFirstChild("Head") or dummy:FindFirstChild("HumanoidRootPart")
+	-- clear existing billboards first
 	for _, d in ipairs(dummy:GetDescendants()) do
 		if d:IsA("BillboardGui") then d:Destroy() end
 	end
-	local head = dummy:FindFirstChild("Head")
+
 	local template = findOverhead(char)
 	if template and head then
 		local oh = template:Clone()
 		oh.Parent = head
 		oh.Adornee = head
 		oh.Enabled = true
+		oh.AlwaysOnTop = true
 		applyOH(oh, opts.name, opts.vip)
-	elseif head then
+	end
+
+	-- always add clean name tag on top (so it's never missing)
+	if head then
 		local bb = Instance.new("BillboardGui")
-		bb.Size = UDim2.fromOffset(160, 44)
-		bb.StudsOffset = Vector3.new(0, 2.6, 0)
+		bb.Name = "NamelessOverhead"
+		bb.Size = UDim2.fromOffset(180, 50)
+		bb.StudsOffset = Vector3.new(0, 3.2, 0)
 		bb.AlwaysOnTop = true
+		bb.MaxDistance = 200
 		bb.Adornee = head
 		bb.Parent = head
+
 		local tl = Instance.new("TextLabel")
 		tl.BackgroundTransparency = 1
-		tl.Size = UDim2.fromScale(1, 1)
+		tl.Size = UDim2.new(1, 0, 0.55, 0)
 		tl.Font = Enum.Font.GothamBold
-		tl.TextSize = 14
-		tl.TextColor3 = Color3.new(1,1,1)
-		tl.TextStrokeTransparency = 0.4
-		tl.Text = opts.name .. (opts.vip and " ★" or "")
+		tl.TextSize = 16
+		tl.TextColor3 = Color3.fromRGB(255, 255, 255)
+		tl.TextStrokeTransparency = 0.3
+		tl.Text = opts.name
 		tl.Parent = bb
+
+		local sub = Instance.new("TextLabel")
+		sub.BackgroundTransparency = 1
+		sub.Size = UDim2.new(1, 0, 0.45, 0)
+		sub.Position = UDim2.new(0, 0, 0.55, 0)
+		sub.Font = Enum.Font.Gotham
+		sub.TextSize = 12
+		sub.TextColor3 = opts.vip and Color3.fromRGB(255, 215, 80) or Color3.fromRGB(180, 180, 200)
+		sub.TextStrokeTransparency = 0.5
+		sub.Text = (opts.vip and "VIP · " or "") .. (opts.device or "")
+		sub.Parent = bb
 	end
 
 	dummy:PivotTo(spawnCF)
 	dummy.Parent = workspace
 	Recruit.model = dummy
 
-	-- STAY PUT — no follow loop
+	-- keep anchored in place (re-anchor if description delayed)
+	task.delay(0.5, function()
+		if not Recruit.model then return end
+		for _, d in ipairs(Recruit.model:GetDescendants()) do
+			if d:IsA("BasePart") then
+				d.Anchored = true
+				d.CanCollide = false
+			end
+		end
+		pcall(function() Recruit.model:PivotTo(spawnCF) end)
+	end)
 
 	if opts.chat and #opts.chat > 0 then
-		task.defer(function()
-			chatSay(opts.chat)
-		end)
+		task.defer(function() chatSay(opts.chat) end)
 	end
 
-	Library.Notify({ Title = "Recruit", Text = opts.name .. " · parado", Icon = "check" })
+	Library.Notify({ Title = "Recruit", Text = opts.name .. " · skin + OH", Icon = "check" })
 end
 
 -------------------------------------------------------------------------------
