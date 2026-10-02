@@ -3365,128 +3365,158 @@ local function chatSay(msg)
 end
 
 local function spawnRecruit(opts)
+	print("[Nameless] spawnRecruit", opts and opts.name, opts and opts.userId)
 	clearRecruit()
+
 	local char = LP.Character
 	if not char then
 		Library.Notify({ Title = "Recruit", Text = "sem personagem", Icon = "x" })
 		return
 	end
 	local hrp = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
-	if not hrp then return end
+	if not hrp then
+		Library.Notify({ Title = "Recruit", Text = "sem HRP", Icon = "x" })
+		return
+	end
 
 	local spawnCF = hrp.CFrame * CFrame.new(0, 0, -6)
-	Recruit.anchor = spawnCF
 
-	-- 1) pull target appearance
-	local okDesc, desc = pcall(function()
-		return Players:GetHumanoidDescriptionFromUserId(opts.userId)
-	end)
-	if not okDesc or not desc then
-		Library.Notify({ Title = "Recruit", Text = "não puxou skin do userId", Icon = "x" })
-		return
+	-- Build a simple visible dummy first (never fails)
+	local dummy = Instance.new("Model")
+	dummy.Name = "NamelessRecruit_" .. tostring(opts.name or "x")
+
+	local function part(name, size, cf, color)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Size = size
+		p.CFrame = cf
+		p.Anchored = true
+		p.CanCollide = false
+		p.Material = Enum.Material.SmoothPlastic
+		p.Color = color or Color3.fromRGB(200, 200, 210)
+		p.Parent = dummy
+		return p
 	end
 
-	-- 2) clone LOCAL character (keeps meshes/clothes structure), then ApplyDescription
-	char.Archivable = true
-	local okClone, dummy = pcall(function() return char:Clone() end)
-	char.Archivable = false
-	if not okClone or not dummy then
-		Library.Notify({ Title = "Recruit", Text = "clone local falhou", Icon = "x" })
-		return
-	end
-	dummy.Name = "NamelessRecruit_" .. tostring(opts.name)
+	local root = part("HumanoidRootPart", Vector3.new(2, 2, 1), spawnCF, Color3.fromRGB(40, 40, 50))
+	dummy.PrimaryPart = root
+	local head = part("Head", Vector3.new(1.2, 1.2, 1.2), spawnCF * CFrame.new(0, 1.6, 0), Color3.fromRGB(240, 200, 170))
+	part("Torso", Vector3.new(2, 2, 1), spawnCF * CFrame.new(0, 0.2, 0), Color3.fromRGB(60, 100, 180))
+	part("Left Arm", Vector3.new(1, 2, 1), spawnCF * CFrame.new(-1.5, 0.2, 0), Color3.fromRGB(240, 200, 170))
+	part("Right Arm", Vector3.new(1, 2, 1), spawnCF * CFrame.new(1.5, 0.2, 0), Color3.fromRGB(240, 200, 170))
+	part("Left Leg", Vector3.new(1, 2, 1), spawnCF * CFrame.new(-0.5, -1.8, 0), Color3.fromRGB(40, 40, 50))
+	part("Right Leg", Vector3.new(1, 2, 1), spawnCF * CFrame.new(0.5, -1.8, 0), Color3.fromRGB(40, 40, 50))
 
-	-- strip scripts / animate
-	for _, d in ipairs(dummy:GetDescendants()) do
-		if d:IsA("BaseScript") or d:IsA("LocalScript") or d:IsA("Script") then
-			d:Destroy()
-		end
-	end
-	-- also remove Animator noise
-	local hum = dummy:FindFirstChildOfClass("Humanoid")
-	if hum then
-		pcall(function()
-			local anim = hum:FindFirstChildOfClass("Animator")
-			if anim then anim:Destroy() end
+	local hum = Instance.new("Humanoid")
+	hum.DisplayName = tostring(opts.name or "")
+	hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	hum.Parent = dummy
+
+	-- Try real avatar skin (optional upgrade)
+	task.spawn(function()
+		local uid = opts.userId
+		if not uid then return end
+		local okDesc, desc = pcall(function()
+			return Players:GetHumanoidDescriptionFromUserId(uid)
 		end)
-		-- apply TARGET skin
-		local okApply = pcall(function()
-			hum:ApplyDescription(desc)
+		print("[Nameless] desc", okDesc, desc)
+		if not okDesc or not desc then return end
+
+		local okModel, avatar = pcall(function()
+			return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
 		end)
-		if not okApply then
-			-- fallback: try CreateHumanoidModel and swap
-			local ok2, created = pcall(function()
-				return Players:CreateHumanoidModelFromDescription(desc, hum.RigType)
+		if not okModel or not avatar then
+			okModel, avatar = pcall(function()
+				return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R6)
 			end)
-			if ok2 and created then
-				dummy:Destroy()
-				dummy = created
-				dummy.Name = "NamelessRecruit_" .. tostring(opts.name)
-				hum = dummy:FindFirstChildOfClass("Humanoid")
+		end
+		print("[Nameless] avatar model", okModel, avatar)
+		if not okModel or not avatar then return end
+		if Recruit.model ~= dummy then
+			avatar:Destroy()
+			return
+		end
+
+		for _, d in ipairs(avatar:GetDescendants()) do
+			if d:IsA("BaseScript") or d:IsA("LocalScript") or d:IsA("Script") then
+				d:Destroy()
+			elseif d:IsA("BasePart") then
+				d.Anchored = true
+				d.CanCollide = false
+				d.Massless = true
 			end
 		end
-	end
-
-	-- freeze parts AFTER description (ApplyDescription may rebuild parts)
-	task.wait()
-	hum = dummy:FindFirstChildOfClass("Humanoid")
-	for _, d in ipairs(dummy:GetDescendants()) do
-		if d:IsA("BasePart") then
-			d.Anchored = true
-			d.CanCollide = false
-			d.Massless = true
+		local ah = avatar:FindFirstChildOfClass("Humanoid")
+		if ah then
+			ah.DisplayName = tostring(opts.name or "")
+			ah.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+			ah.WalkSpeed = 0
 		end
-		if d:IsA("BaseScript") or d:IsA("LocalScript") or d:IsA("Script") then
-			d:Destroy()
+		avatar.Name = dummy.Name
+		avatar:PivotTo(spawnCF)
+		avatar.Parent = workspace
+
+		-- move OH to new model
+		local oldHead = head
+		local newHead = avatar:FindFirstChild("Head") or avatar:FindFirstChild("HumanoidRootPart")
+		dummy:Destroy()
+		dummy = avatar
+		Recruit.model = avatar
+		head = newHead
+
+		if head then
+			for _, d in ipairs(dummy:GetDescendants()) do
+				if d:IsA("BillboardGui") then d:Destroy() end
+			end
+			local bb = Instance.new("BillboardGui")
+			bb.Name = "NamelessOverhead"
+			bb.Size = UDim2.fromOffset(180, 50)
+			bb.StudsOffset = Vector3.new(0, 3.2, 0)
+			bb.AlwaysOnTop = true
+			bb.MaxDistance = 250
+			bb.Adornee = head
+			bb.Parent = head
+			local tl = Instance.new("TextLabel")
+			tl.BackgroundTransparency = 1
+			tl.Size = UDim2.new(1, 0, 0.55, 0)
+			tl.Font = Enum.Font.GothamBold
+			tl.TextSize = 16
+			tl.TextColor3 = Color3.new(1, 1, 1)
+			tl.TextStrokeTransparency = 0.3
+			tl.Text = tostring(opts.name or "")
+			tl.Parent = bb
+			local sub = Instance.new("TextLabel")
+			sub.BackgroundTransparency = 1
+			sub.Size = UDim2.new(1, 0, 0.45, 0)
+			sub.Position = UDim2.new(0, 0, 0.55, 0)
+			sub.Font = Enum.Font.Gotham
+			sub.TextSize = 12
+			sub.TextColor3 = opts.vip and Color3.fromRGB(255, 215, 80) or Color3.fromRGB(180, 180, 200)
+			sub.TextStrokeTransparency = 0.5
+			sub.Text = (opts.vip and "VIP · " or "") .. tostring(opts.device or "")
+			sub.Parent = bb
 		end
-	end
-	if hum then
-		hum.DisplayName = opts.name
-		hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
-		hum.WalkSpeed = 0
-		hum.JumpPower = 0
-		pcall(function() hum.JumpHeight = 0 end)
-		pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
-	end
+	end)
 
-	-- 3) overhead ALWAYS (template or custom)
-	local head = dummy:FindFirstChild("Head") or dummy:FindFirstChild("HumanoidRootPart")
-	-- clear existing billboards first
-	for _, d in ipairs(dummy:GetDescendants()) do
-		if d:IsA("BillboardGui") then d:Destroy() end
-	end
-
-	local template = findOverhead(char)
-	if template and head then
-		local oh = template:Clone()
-		oh.Parent = head
-		oh.Adornee = head
-		oh.Enabled = true
-		oh.AlwaysOnTop = true
-		applyOH(oh, opts.name, opts.vip)
-	end
-
-	-- always add clean name tag on top (so it's never missing)
-	if head then
+	-- OH on placeholder immediately
+	do
 		local bb = Instance.new("BillboardGui")
 		bb.Name = "NamelessOverhead"
 		bb.Size = UDim2.fromOffset(180, 50)
 		bb.StudsOffset = Vector3.new(0, 3.2, 0)
 		bb.AlwaysOnTop = true
-		bb.MaxDistance = 200
+		bb.MaxDistance = 250
 		bb.Adornee = head
 		bb.Parent = head
-
 		local tl = Instance.new("TextLabel")
 		tl.BackgroundTransparency = 1
 		tl.Size = UDim2.new(1, 0, 0.55, 0)
 		tl.Font = Enum.Font.GothamBold
 		tl.TextSize = 16
-		tl.TextColor3 = Color3.fromRGB(255, 255, 255)
+		tl.TextColor3 = Color3.new(1, 1, 1)
 		tl.TextStrokeTransparency = 0.3
-		tl.Text = opts.name
+		tl.Text = tostring(opts.name or "?")
 		tl.Parent = bb
-
 		local sub = Instance.new("TextLabel")
 		sub.BackgroundTransparency = 1
 		sub.Size = UDim2.new(1, 0, 0.45, 0)
@@ -3495,31 +3525,20 @@ local function spawnRecruit(opts)
 		sub.TextSize = 12
 		sub.TextColor3 = opts.vip and Color3.fromRGB(255, 215, 80) or Color3.fromRGB(180, 180, 200)
 		sub.TextStrokeTransparency = 0.5
-		sub.Text = (opts.vip and "VIP · " or "") .. (opts.device or "")
+		sub.Text = (opts.vip and "VIP · " or "") .. tostring(opts.device or "")
 		sub.Parent = bb
 	end
 
-	dummy:PivotTo(spawnCF)
 	dummy.Parent = workspace
 	Recruit.model = dummy
+	Recruit.anchor = spawnCF
 
-	-- keep anchored in place (re-anchor if description delayed)
-	task.delay(0.5, function()
-		if not Recruit.model then return end
-		for _, d in ipairs(Recruit.model:GetDescendants()) do
-			if d:IsA("BasePart") then
-				d.Anchored = true
-				d.CanCollide = false
-			end
-		end
-		pcall(function() Recruit.model:PivotTo(spawnCF) end)
-	end)
-
-	if opts.chat and #opts.chat > 0 then
+	if opts.chat and #tostring(opts.chat) > 0 then
 		task.defer(function() chatSay(opts.chat) end)
 	end
 
-	Library.Notify({ Title = "Recruit", Text = opts.name .. " · skin + OH", Icon = "check" })
+	Library.Notify({ Title = "Recruit", Text = tostring(opts.name) .. " spawnado", Icon = "check" })
+	print("[Nameless] recruit parented", dummy:GetFullName())
 end
 
 -------------------------------------------------------------------------------
@@ -3582,20 +3601,18 @@ Main:AddDropdown({
 
 Main:AddLabel("Auto Recrutamento")
 
-local recName, recChat, recDevice, recVip = "", "", "Computer", false
-
-Main:AddInput({
+local recDevice, recVip = "Computer", false
+local nameInput = Main:AddInput({
 	Name = "Nome do player",
 	Placeholder = "username",
 	Default = "",
-	Callback = function(t) recName = t end,
+	Callback = function() end,
 })
-
-Main:AddInput({
+local chatInput = Main:AddInput({
 	Name = "Mensagem no chat",
 	Placeholder = "opcional",
 	Default = "",
-	Callback = function(t) recChat = t end,
+	Callback = function() end,
 })
 
 Main:AddDropdown({
@@ -3614,17 +3631,28 @@ Main:AddToggle({
 Main:AddButton({
 	Name = "Recrutar",
 	Callback = function()
-		local ok, info = userExists(recName)
-		if not ok then
-			Library.Notify({ Title = "Recruit", Text = "player não existe", Icon = "x" })
+		local typed = ""
+		pcall(function() typed = nameInput and nameInput.Get and nameInput.Get() or "" end)
+		typed = tostring(typed or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		print("[Nameless] recruit click name=", typed)
+		if typed == "" then
+			Library.Notify({ Title = "Recruit", Text = "digite um username", Icon = "x" })
 			return
 		end
+		local ok, info = userExists(typed)
+		print("[Nameless] userExists", ok, info and info.userId, info and info.name)
+		if not ok then
+			Library.Notify({ Title = "Recruit", Text = "player não existe: " .. typed, Icon = "x" })
+			return
+		end
+		local chatMsg = ""
+		pcall(function() chatMsg = chatInput and chatInput.Get and chatInput.Get() or "" end)
 		spawnRecruit({
 			name = info.name,
 			userId = info.userId,
 			device = recDevice,
 			vip = recVip,
-			chat = recChat,
+			chat = chatMsg,
 		})
 	end,
 })
